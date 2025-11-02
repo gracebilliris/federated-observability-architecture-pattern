@@ -1,0 +1,215 @@
+{
+    "name": "Mock External System pushing Telemetry Data",
+    "nodes": [
+        {
+            "parameters": {
+                "url": "={{ $json.url }}",
+                "responseFormat": "string",
+                "options": {}
+            },
+            "name": "Fetch Raw Telemetry",
+            "type": "n8n-nodes-base.httpRequest",
+            "typeVersion": 1,
+            "position": [384, 1024],
+            "id": "bf7acc34-ff52-4554-ae70-9b12769b38fe",
+            "executeOnce": false,
+            "alwaysOutputData": false
+        },
+        {
+            "parameters": {
+                "mode": "runOnceForEachItem",
+                "jsCode": "// n8n Code Node — Mode: Run Once for Each Item\nconst item = $input.item.json;\n\nconst doc = {\n  ingestTimestamp: Date.now(),\n  raw:             null,\n  parseError:      false,\n  errorMessage:    null\n};\n\n// 1. Determine the raw data representation\nlet rawData = null;\nif (item.data !== undefined) {\n  rawData = item.data;\n} else if (item.raw !== undefined) {\n  rawData = item.raw;\n} else {\n  rawData = item;\n}\ndoc.raw = rawData;\n\n// 2. Prepare extracted document\nlet extracted = {};\n\n// 3. If the rawData is a string, try parsing as JSON (or fallback)\nif (typeof rawData === 'string') {\n  try {\n    extracted = JSON.parse(rawData);\n  } catch(err) {\n    // cannot parse string → keep as raw in extracted\n    doc.parseError    = true;\n    doc.errorMessage  = `JSON.parse failed on raw string: ${err.message}`;\n    extracted = { rawString: rawData };\n  }\n} else if (typeof rawData === 'object' && rawData !== null) {\n  extracted = rawData;\n} else {\n  // unexpected type\n  doc.parseError    = true;\n  doc.errorMessage  = `Unsupported data type for rawData: ${typeof rawData}`;\n  extracted = { rawValue: rawData };\n}\n\n// 4. Copy all key/value pairs from extracted to doc (dynamic extraction)\nfor (const [key, value] of Object.entries(extracted)) {\n  doc[key] = value;\n}\n\n// 5. Return result\nreturn { json: doc };\n"
+            },
+            "type": "n8n-nodes-base.code",
+            "typeVersion": 2,
+            "position": [832, 952],
+            "id": "fd2fb113-2121-4842-8777-dfab2d144368",
+            "name": "Format For MongoDB"
+        },
+        {
+            "parameters": {
+                "operation": "insert",
+                "collection": "local_raw",
+                "fields": "=ingestTimestamp, raw, parseError, errorMessage, span_id, parent_span_id, agent_id, operation, target_agent_id, start_time, end_time, status",
+                "options": {}
+            },
+            "name": "Insert to Local DB",
+            "type": "n8n-nodes-base.mongoDb",
+            "typeVersion": 1.2,
+            "position": [1056, 952],
+            "id": "5d50bbfb-9711-4b99-846d-82ffb5dde98d",
+            "credentials": {
+                "mongoDb": {
+                    "id": "7fXMn7Hil5ZoBmRu",
+                    "name": "local_db MongoDB account"
+                }
+            }
+        },
+        {
+            "parameters": {
+                "options": {}
+            },
+            "type": "n8n-nodes-base.splitInBatches",
+            "typeVersion": 3,
+            "position": [608, 1024],
+            "id": "5552af4f-149f-4146-ac0d-342c1d45f89a",
+            "name": "Loop over API Data"
+        },
+        {
+            "parameters": {
+                "topic": "telemetry-local-db-raw",
+                "sendInputData": "={{ JSON.stringify($json) }}",
+                "options": {}
+            },
+            "name": "Publish to Kafka Topic",
+            "type": "n8n-nodes-base.kafka",
+            "typeVersion": 1,
+            "position": [1280, 1024],
+            "id": "a7fdca60-ca38-41b7-9eb7-4a75acfe0931",
+            "credentials": {
+                "kafka": {
+                    "id": "cNY3lnfralb8Mqiw",
+                    "name": "Kafka account"
+                }
+            }
+        },
+        {
+            "parameters": {
+                "jsCode": "const endpoints = [\n  \"https://mp67deccbcfea4b8e3df.free.beeceptor.com/api/traces\",\n \"https://mp67deccbcfea4b8e3df.free.beeceptor.com/api/event_logs\"\n];\nreturn endpoints.map(url => ({ json: { url } }));"
+            },
+            "name": "Endpoint Selector",
+            "type": "n8n-nodes-base.code",
+            "typeVersion": 2,
+            "position": [160, 1024],
+            "id": "4247a25d-936d-4384-8343-0427b829015a"
+        },
+        {
+            "parameters": {},
+            "type": "n8n-nodes-base.manualTrigger",
+            "typeVersion": 1,
+            "position": [-64, 1120],
+            "id": "f4ca8409-0838-4dd6-922c-fd233861b266",
+            "name": "When clicking ‘Execute workflow’"
+        },
+        {
+            "parameters": {
+                "rule": {
+                    "interval": [
+                        {
+                            "field": "seconds",
+                            "secondsInterval": 95
+                        }
+                    ]
+                }
+            },
+            "type": "n8n-nodes-base.scheduleTrigger",
+            "typeVersion": 1.2,
+            "position": [-64, 928],
+            "id": "1bea1cf5-7493-4aef-8f9d-704fdf5a4890",
+            "name": "Schedule Trigger"
+        }
+    ],
+    "pinData": {},
+    "connections": {
+        "Fetch Raw Telemetry": {
+            "main": [
+                [
+                    {
+                        "node": "Loop over API Data",
+                        "type": "main",
+                        "index": 0
+                    }
+                ]
+            ]
+        },
+        "Format For MongoDB": {
+            "main": [
+                [
+                    {
+                        "node": "Insert to Local DB",
+                        "type": "main",
+                        "index": 0
+                    }
+                ]
+            ]
+        },
+        "Insert to Local DB": {
+            "main": [
+                [
+                    {
+                        "node": "Publish to Kafka Topic",
+                        "type": "main",
+                        "index": 0
+                    }
+                ]
+            ]
+        },
+        "Loop over API Data": {
+            "main": [
+                [],
+                [
+                    {
+                        "node": "Format For MongoDB",
+                        "type": "main",
+                        "index": 0
+                    }
+                ]
+            ]
+        },
+        "Publish to Kafka Topic": {
+            "main": [
+                [
+                    {
+                        "node": "Loop over API Data",
+                        "type": "main",
+                        "index": 0
+                    }
+                ]
+            ]
+        },
+        "Endpoint Selector": {
+            "main": [
+                [
+                    {
+                        "node": "Fetch Raw Telemetry",
+                        "type": "main",
+                        "index": 0
+                    }
+                ]
+            ]
+        },
+        "When clicking ‘Execute workflow’": {
+            "main": [
+                [
+                    {
+                        "node": "Endpoint Selector",
+                        "type": "main",
+                        "index": 0
+                    }
+                ]
+            ]
+        },
+        "Schedule Trigger": {
+            "main": [
+                [
+                    {
+                        "node": "Endpoint Selector",
+                        "type": "main",
+                        "index": 0
+                    }
+                ]
+            ]
+        }
+    },
+    "active": false,
+    "settings": {
+        "executionOrder": "v1"
+    },
+    "versionId": "536b1aa3-bec7-4d49-847a-af4514bc35cd",
+    "meta": {
+        "templateCredsSetupCompleted": true,
+        "instanceId": "f32d5822a2849cb195e1ab5306933bfaefd5e72c87d29738a06685603d71a039"
+    },
+    "id": "zvL5VeH1oq47bKd4",
+    "tags": []
+}
